@@ -21,7 +21,7 @@ Windows_ai/
 
 ## 使用前准备
 
-1. 安装 PowerShell 7（其实其他版本也没有问题，也就是说不用装），并确保可以访问配置中的 OpenAI 兼容接口。
+1. 下载压缩包并解压，安装 PowerShell 7（其实其他版本也没有问题，也就是说不用装），并确保可以访问配置中的 OpenAI 兼容接口。
 2. 编辑 `config.json`：
    - `aiProvider`：`OpenAI` 或 `Mock`。（这里的openai指的是openai的兼容接口，也就是其他模型也行）
    - `apiKey` / `apiUrl` / `model`：对应服务的密钥、端点、模型名。
