@@ -1,0 +1,8 @@
+﻿{
+    "aiProvider":"OpenAI",
+    "apiKey": "",
+    "apiUrl": "",
+    "model": "",
+    "backupRetentionDays": 1, 
+    "maxContextTurns": 0
+}
