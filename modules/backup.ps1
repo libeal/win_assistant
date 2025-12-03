@@ -1,5 +1,6 @@
-﻿<#
-    modules/backup.ps1
+﻿# modules/backup.ps1
+
+<#
     为潜在的文件/目录写入命令提供可选备份。脚本会解析命令中的路径，
     在真正执行之前让用户决定是否创建同目录压缩备份。
 #>
@@ -21,9 +22,7 @@ function Test-CommandRequiresBackupPrompt {
 
     $skipKeywords = @(
         'compress-archive',
-        'new-pathbackuparchive',
-        'new-filebackuparchive',
-        'expand-archive'
+        'new-pathbackuparchive'
     )
 
     foreach ($keyword in $skipKeywords) {
@@ -85,198 +84,104 @@ function Expand-CommandPathVariables {
         })
 }
 
-function Test-PathPatternIndicator {
+function Convert-PathToken {
     param (
-        [string]$Candidate
+        [string]$Value
     )
 
-    if (Test-StringEmpty -Value $Candidate) {
-        return $false
+    if (Test-StringEmpty -Value $Value) {
+        return ""
     }
 
-    if ($Candidate -match '[*?]') {
-        return $true
-    }
-
-    if ($Candidate -match '\$env:') {
-        return $true
-    }
-
-    if ($Candidate -match '\$\(') {
-        return $true
-    }
-
-    return $false
+    return $Value.Trim('"', "'").Trim()
 }
 
-function Test-LiteralPathIndicator {
-    param (
-        [string]$Candidate
-    )
-
-    if (Test-StringEmpty -Value $Candidate) {
-        return $false
-    }
-
-    $value = $Candidate.Trim('"', "'")
-    if (Test-StringEmpty -Value $value) {
-        return $false
-    }
-
-    if ($value -match '^[a-zA-Z]:\\') {
-        return $true
-    }
-
-    if ($value.StartsWith('\\')) {
-        return $true
-    }
-
-    if ($value.StartsWith('.')) {
-        return $true
-    }
-
-    if ($value.IndexOf('\') -ge 0 -or $value.IndexOf('/') -ge 0) {
-        return $true
-    }
-
-    return $false
-}
-
-function Get-CommandFileTargets {
+function Get-CommandPathCandidates {
     <#
         .SYNOPSIS
-            从命令字符串中提取可能的路径（文件或目录）。
+            从命令字符串中提取可能的路径片段，去重后返回。
     #>
     param (
-        [Parameter(Mandatory = $true)]
         [string]$CommandText
     )
 
-    $resolvedTargets = New-Object System.Collections.ArrayList
-    $unresolvedPatterns = New-Object System.Collections.ArrayList
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
 
     if (Test-StringEmpty -Value $CommandText) {
-        return [PSCustomObject]@{
-            Resolved   = $resolvedTargets
-            Unresolved = $unresolvedPatterns
-        }
+        return $candidates
     }
 
-    $addCandidate = {
-        param($candidate)
-        if (Test-StringEmpty -Value $candidate) {
+    $registerCandidate = {
+        param($value)
+        $normalized = Convert-PathToken -Value $value
+        if (Test-StringEmpty -Value $normalized) {
             return
         }
-        $resolvedItems = Resolve-ExistingPath -Candidate $candidate
-        $added = $false
-        foreach ($resolved in @($resolvedItems)) {
-            if ($resolved -and -not $resolvedTargets.Contains($resolved)) {
-                [void]$resolvedTargets.Add($resolved)
-                $added = $true
-            }
+        if ($seen.Add($normalized)) {
+            $null = $candidates.Add($normalized)
         }
-
-        $shouldTrackUnresolved = $false
-        if (Test-PathPatternIndicator -Candidate $candidate) {
-            $shouldTrackUnresolved = $true
-        }
-        elseif (Test-LiteralPathIndicator -Candidate $candidate) {
-            $shouldTrackUnresolved = $true
-        }
-
-        if (-not $added -and $shouldTrackUnresolved) {
-            if (-not $unresolvedPatterns.Contains($candidate)) {
-                [void]$unresolvedPatterns.Add($candidate)
-            }
-        }
-    }
-
-    $quotedMatches = [regex]::Matches($CommandText, "([\""'])(.+?)\1")
-    foreach ($match in $quotedMatches) {
-        $value = $match.Groups[2].Value.Trim()
-        & $addCandidate $value
-    }
-
-    $bareMatches = [regex]::Matches($CommandText, "(?<![\w])([a-zA-Z]:\\[^\s\""']+)")
-    foreach ($match in $bareMatches) {
-        $value = $match.Groups[1].Value.TrimEnd(';', ',', ')')
-        & $addCandidate $value
-    }
-
-    $uncMatches = [regex]::Matches($CommandText, "(?<![\w])(\\\\\\\\[^\s\""']+)")
-    foreach ($match in $uncMatches) {
-        $value = $match.Groups[1].Value.TrimEnd(';', ',', ')')
-        & $addCandidate $value
     }
 
     try {
         $errors = $null
         $tokens = [System.Management.Automation.PSParser]::Tokenize($CommandText, [ref]$errors)
         $skipValueParameters = @('-filter', '-include', '-exclude', '-filefilter', '-name')
-        $pendingSkipParameter = $null
+        $waitForValue = $false
 
-        for ($i = 0; $i -lt $tokens.Count; $i++) {
-            $token = $tokens[$i]
-
-            if ($pendingSkipParameter -and
-                $token.Type -ne [System.Management.Automation.PSTokenType]::NewLine -and
-                $token.Type -ne [System.Management.Automation.PSTokenType]::Comment) {
-                $pendingSkipParameter = $null
-                if ($token.Type -ne [System.Management.Automation.PSTokenType]::CommandParameter) {
-                    continue
+        foreach ($token in $tokens) {
+            switch ($token.Type) {
+                ([System.Management.Automation.PSTokenType]::CommandParameter) {
+                    $parameterName = $token.Content.ToLowerInvariant()
+                    $waitForValue = $skipValueParameters -contains $parameterName
+                    break
                 }
-            }
-
-            if ($token.Type -eq [System.Management.Automation.PSTokenType]::CommandParameter) {
-                $parameterName = $token.Content.ToLowerInvariant()
-                if ($skipValueParameters -contains $parameterName) {
-                    $pendingSkipParameter = $parameterName
+                ([System.Management.Automation.PSTokenType]::String) {
+                    if ($waitForValue) {
+                        $waitForValue = $false
+                        break
+                    }
+                    $value = Convert-PathToken -Value $token.Content
+                    if (Test-StringEmpty -Value $value) {
+                        break
+                    }
+                    if ($value -match '[\\/:]' -or
+                        $value.StartsWith('.') -or
+                        $value -match '\.[a-zA-Z0-9]{1,6}$') {
+                        & $registerCandidate $value
+                    }
+                    break
                 }
-                else {
-                    $pendingSkipParameter = $null
+                ([System.Management.Automation.PSTokenType]::CommandArgument) {
+                    if ($waitForValue) {
+                        $waitForValue = $false
+                        break
+                    }
+                    $value = Convert-PathToken -Value $token.Content
+                    if (Test-StringEmpty -Value $value) {
+                        break
+                    }
+                    if ($value -match '[\\/:]' -or
+                        $value.StartsWith('.') -or
+                        $value -match '\.[a-zA-Z0-9]{1,6}$') {
+                        & $registerCandidate $value
+                    }
+                    break
                 }
-                continue
-            }
-
-            if ($token.Type -ne [System.Management.Automation.PSTokenType]::String -and
-                $token.Type -ne [System.Management.Automation.PSTokenType]::CommandArgument) {
-                continue
-            }
-
-            if ($pendingSkipParameter) {
-                $pendingSkipParameter = $null
-                continue
-            }
-
-            $value = $token.Content.Trim('"', "'").Trim()
-            if (Test-StringEmpty -Value $value) {
-                continue
-            }
-
-            $looksLikePath = $false
-            if ($value.IndexOf('\') -ge 0 -or $value.IndexOf('/') -ge 0) {
-                $looksLikePath = $true
-            }
-            elseif ($value.StartsWith('.')) {
-                $looksLikePath = $true
-            }
-            elseif ($value -match "\.[a-zA-Z0-9]{1,6}$") {
-                $looksLikePath = $true
-            }
-
-            if ($looksLikePath) {
-                & $addCandidate $value
+                default {
+                    if ($token.Type -ne [System.Management.Automation.PSTokenType]::NewLine -and
+                        $token.Type -ne [System.Management.Automation.PSTokenType]::Comment) {
+                        $waitForValue = $false
+                    }
+                }
             }
         }
     }
     catch {
-        Write-Host "[备份] 命令解析失败，已回退到基础路径匹配：$($_.Exception.Message)" -ForegroundColor DarkYellow
+        Write-Host '[备份] 命令解析失败，已跳过路径提取：{0}' -f $_.Exception.Message -ForegroundColor DarkYellow
     }
 
-    return [PSCustomObject]@{
-        Resolved   = $resolvedTargets
-        Unresolved = $unresolvedPatterns
-    }
+    return $candidates
 }
 
 function Resolve-ExistingPath {
@@ -284,68 +189,128 @@ function Resolve-ExistingPath {
         [string]$Candidate
     )
 
-    if (Test-StringEmpty -Value $Candidate) {
+    $normalized = Convert-PathToken -Value $Candidate
+    if (Test-StringEmpty -Value $normalized) {
         return @()
     }
 
-    $normalized = $Candidate.Trim('"', "'")
-    $expanded = Expand-CommandPathVariables -Candidate $normalized
-
-    $pathsToTry = New-Object System.Collections.Generic.List[string]
-    if (-not (Test-StringEmpty -Value $normalized)) {
-        $pathsToTry.Add($normalized) | Out-Null
-    }
-    if (-not (Test-StringEmpty -Value $expanded) -and $expanded -ne $normalized) {
-        $pathsToTry.Add($expanded) | Out-Null
-    }
+    $expanded = Convert-PathToken -Value (Expand-CommandPathVariables -Candidate $normalized)
 
     $results = New-Object System.Collections.Generic.List[string]
+    $seenResults = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    $addResult = {
+        param($path)
+        if (Test-StringEmpty -Value $path) {
+            return
+        }
+        if ($seenResults.Add($path)) {
+            $null = $results.Add($path)
+        }
+    }
 
-    foreach ($candidatePath in $pathsToTry) {
-        try {
-            $literalMatches = Resolve-Path -LiteralPath $candidatePath -ErrorAction Stop
-            foreach ($match in $literalMatches) {
-                $path = $match.ProviderPath
-                if ($path -and -not $results.Contains($path)) {
-                    $results.Add($path) | Out-Null
-                }
-            }
-            continue
-        }
-        catch {
-            # ignore literal failures
-        }
+    $variants = New-Object System.Collections.Generic.List[string]
+    $null = $variants.Add($normalized)
+    if (-not (Test-StringEmpty -Value $expanded) -and
+        -not $expanded.Equals($normalized, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $null = $variants.Add($expanded)
+    }
 
-        try {
-            $wildcardMatches = Resolve-Path -Path $candidatePath -ErrorAction Stop
-            foreach ($match in $wildcardMatches) {
-                $path = $match.ProviderPath
-                if ($path -and -not $results.Contains($path)) {
-                    $results.Add($path) | Out-Null
-                }
-            }
-        }
-        catch {
+    foreach ($candidatePath in $variants) {
+        $resolvedByResolvers = $false
+        $resolvers = @(
+            { Resolve-Path -LiteralPath $args[0] -ErrorAction Stop },
+            { Resolve-Path -Path $args[0] -ErrorAction Stop }
+        )
+
+        foreach ($resolver in $resolvers) {
             try {
-                if (Test-Path -Path $candidatePath -ErrorAction Stop) {
-                    try {
-                        $converted = Convert-Path -Path $candidatePath -ErrorAction Stop
-                        if ($converted -and -not $results.Contains($converted)) {
-                            $results.Add($converted) | Out-Null
-                        }
-                    }
-                    catch {
-                        # ignore convert failures
-                    }
+                $resolverResults = & $resolver $candidatePath
+                foreach ($match in $resolverResults) {
+                    $resolvedByResolvers = $true
+                    & $addResult $match.ProviderPath
+                }
+                if ($resolvedByResolvers) {
+                    break
                 }
             }
             catch {
-                # 静默忽略 Test-Path 的权限或访问异常
+                continue
             }
+        }
+
+        if ($resolvedByResolvers) {
+            continue
+        }
+
+        try {
+            if (Test-Path -LiteralPath $candidatePath -ErrorAction Stop) {
+                $converted = $null
+                try {
+                    $converted = Convert-Path -LiteralPath $candidatePath -ErrorAction Stop
+                }
+                catch {
+                    $converted = $candidatePath
+                }
+                & $addResult $converted
+            }
+        }
+        catch {
+            continue
         }
     }
 
     return ,$results.ToArray()
+}
+
+function Get-CommandFileTargets {
+    <#
+        .SYNOPSIS
+            汇总命令中可备份的路径，并区分可解析与不可解析的条目。
+    #>
+    param (
+        [string]$CommandText
+    )
+
+    $result = [PSCustomObject]@{
+        Resolved   = New-Object System.Collections.Generic.List[string]
+        Unresolved = New-Object System.Collections.Generic.List[string]
+    }
+
+    if (Test-StringEmpty -Value $CommandText) {
+        return $result
+    }
+
+    $resolvedSet = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    $unresolvedSet = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+
+    $candidates = Get-CommandPathCandidates -CommandText $CommandText
+    foreach ($candidate in $candidates) {
+        $normalized = Convert-PathToken -Value $candidate
+        if (Test-StringEmpty -Value $normalized) {
+            continue
+        }
+
+        $resolvedMatches = @()
+        try {
+            $resolvedMatches = @(Resolve-ExistingPath -Candidate $normalized)
+        }
+        catch {
+            $resolvedMatches = @()
+        }
+
+        if ($resolvedMatches.Count -gt 0) {
+            foreach ($match in $resolvedMatches) {
+                if ($resolvedSet.Add($match)) {
+                    $null = $result.Resolved.Add($match)
+                }
+            }
+        }
+        elseif ($unresolvedSet.Add($normalized)) {
+            $null = $result.Unresolved.Add($normalized)
+        }
+    }
+
+    return $result
 }
 
 function New-PathBackupArchive {
@@ -371,18 +336,12 @@ function New-PathBackupArchive {
         return $null
     }
 
-    $isDirectory = $item.PSIsContainer
-    if ($isDirectory) {
-        $targetName = $item.Name
+    $targetName = if ($item.PSIsContainer) { $item.Name } else { $item.BaseName }
+    $targetDirectory = if ($item.PSIsContainer) {
+        Split-Path -Path $item.FullName -Parent
     }
     else {
-        $targetName = $item.BaseName
-    }
-    if ($isDirectory) {
-        $targetDirectory = Split-Path -Path $item.FullName -Parent
-    }
-    else {
-        $targetDirectory = $item.DirectoryName
+        $item.DirectoryName
     }
     if (Test-StringEmpty -Value $targetDirectory) {
         $targetDirectory = Split-Path -Path $item.FullName -Parent
@@ -401,17 +360,12 @@ function New-PathBackupArchive {
 
     try {
         Compress-Archive -LiteralPath $item.FullName -DestinationPath $zipPath -Force
-        if ($isDirectory) {
-            $typeText = "目录"
-        }
-        else {
-            $typeText = "文件"
-        }
+        $typeText = if ($item.PSIsContainer) { '目录' } else { '文件' }
         $message = "[备份] 已为{0}创建压缩包：{1}" -f $typeText, $zipPath
         Write-Host $message -ForegroundColor Cyan
         return [PSCustomObject]@{
             TargetFile = $item.FullName
-            TargetType = if ($isDirectory) { 'Directory' } else { 'File' }
+            TargetType = if ($item.PSIsContainer) { 'Directory' } else { 'File' }
             BackupFile = $zipPath
             Timestamp  = Get-Date
         }
@@ -419,6 +373,34 @@ function New-PathBackupArchive {
     catch {
         Write-Host "[备份] 创建压缩包失败：$($_.Exception.Message)" -ForegroundColor Red
         return $null
+    }
+}
+
+function Read-YesNoChoice {
+    param (
+        [string]$Message,
+        [ValidateSet('Y', 'N')]
+        [string]$Default = $null
+    )
+
+    while ($true) {
+        $prompt = $Message
+        if ($Default) {
+            $prompt = "$prompt (默认$Default)"
+        }
+
+        $choice = Read-Host $prompt
+        if (Test-StringEmpty -Value $choice) {
+            if ($Default) {
+                return $Default -eq 'Y'
+            }
+            continue
+        }
+
+        $normalized = $choice.ToUpper()
+        if ($normalized -in @('Y', 'N')) {
+            return $normalized -eq 'Y'
+        }
     }
 }
 
@@ -441,21 +423,28 @@ function Invoke-BackupSelection {
         return $result
     }
 
-    $targetInfo = Get-CommandFileTargets -CommandText $CommandText
-    $targets = $targetInfo.Resolved
-    $unresolved = $targetInfo.Unresolved
+    try {
+        $targetInfo = Get-CommandFileTargets -CommandText $CommandText
+    }
+    catch {
+        Write-Host "[备份] 路径解析失败，已跳过本次备份提示：$($_.Exception.Message)" -ForegroundColor Yellow
+        return $result
+    }
+
+    if (-not $targetInfo) {
+        return $result
+    }
+
+    $targets = if ($targetInfo.Resolved) { $targetInfo.Resolved } else { @() }
+    $unresolved = if ($targetInfo.Unresolved) { $targetInfo.Unresolved } else { @() }
 
     if ($unresolved.Count -gt 0) {
         Write-Host "[提示] 以下路径无法自动解析以执行备份，请确认是否需要先手动处理：" -ForegroundColor Yellow
         foreach ($pattern in $unresolved) {
             Write-Host " - $pattern" -ForegroundColor DarkYellow
         }
-        $manualChoice = ""
-        while ($manualChoice -notin @('Y', 'N')) {
-            $manualChoice = Read-Host "是否立即继续执行命令？(Y=继续执行, N=取消执行命令)"
-            $manualChoice = $manualChoice.ToUpper()
-        }
-        if ($manualChoice -eq 'N') {
+
+        if (-not (Read-YesNoChoice -Message '是否立即继续执行命令？(Y=继续执行, N=取消执行命令)')) {
             $result.ShouldAbort = $true
             return $result
         }
@@ -466,21 +455,15 @@ function Invoke-BackupSelection {
     }
 
     foreach ($target in $targets) {
-        $pathTypeLabel = "路径"
+        $pathTypeLabel = '路径'
         if (Test-Path -LiteralPath $target -PathType Leaf) {
-            $pathTypeLabel = "文件"
+            $pathTypeLabel = '文件'
         }
         elseif (Test-Path -LiteralPath $target -PathType Container) {
-            $pathTypeLabel = "目录"
+            $pathTypeLabel = '目录'
         }
 
-        $choice = ""
-        while ($choice -notin @('Y', 'N')) {
-            $choice = Read-Host "检测到$pathTypeLabel '$target'，是否先生成备份？(Y/N)"
-            $choice = $choice.ToUpper()
-        }
-
-        if ($choice -eq 'Y') {
+        if (Read-YesNoChoice -Message "检测到$pathTypeLabel '$target'，是否先生成备份？(Y/N)") {
             $backup = New-PathBackupArchive -LiteralPath $target
             if ($backup) {
                 $result.Backups += $backup
@@ -493,3 +476,4 @@ function Invoke-BackupSelection {
 
     return $result
 }
+

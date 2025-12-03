@@ -1,6 +1,6 @@
 Windows AI 终端是一套运行在 Windows 本地的 PowerShell 助理，可以把自然语言需求转换为结构化命令。  
 在执行前它会提示风险、提供可选备份，并记录完整的会话轨迹，尽量保证安全、可控、可追溯。除执行命令外，同样支持纯 AI 问答。  
-（我认为ai类似于大脑+嘴，这只是给他装了义肢）
+（我认为ai类似于大脑和嘴，这只是给他装了义肢）
 ## 目录结构
 
 ```
@@ -8,12 +8,14 @@ Windows_ai/
 ├─ main.bat           # 启动入口
 ├─ core.ps1           # 主流程：交互循环、AI 调用、模块调度
 ├─ config.json          # 配置文件：模型、API、上下文参数
+├─ personalization.md   # 个性化配置：可长期共享的环境信息
 ├─ modules/
 │  ├─ common.ps1       # 公共工具：字段读取、错误格式化
 │  ├─ ai-api.ps1       # AI 接口：封装 OpenAI 兼容 Chat Completions
 │  ├─ executor.ps1      # 执行器：展示命令、确认、备份、执行
 │  ├─ backup.ps1       # 备份器：命令解析与压缩备份
-│  └─ logger.ps1       # 日志器：会话记录与 Markdown 导出
+│  ├─ logger.ps1       # 日志器：会话记录与 Markdown 导出
+│  └─ personalization.ps1 # 个性化模块：读取并注入 personalization.md
 ├─ test-api.ps1         # API 连通性测试脚本，独立运行
 ├─ logs/             # 会话日志输出目录
 └─ README.md
@@ -25,7 +27,6 @@ Windows_ai/
 2. 编辑 `config.json`：
    - `aiProvider`：`OpenAI` 或 `Mock`。（这里的openai指的是openai的兼容接口，也就是其他模型也行）
    - `apiKey` / `apiUrl` / `model`：对应服务的密钥、端点、模型名。
-   - `backupRetentionDays`：预留字段，便于扩展外部备份策略。
    - `maxContextTurns`：上下文记忆轮数，0为完全关闭，想要几轮上下文就写几轮
 3. 若需代理，在系统或 PowerShell 会话中配置好 `HTTP(S)_PROXY` 等环境变量。
 
@@ -47,8 +48,13 @@ Windows_ai/
 
 ## 上下文与日志
 - `core.ps1` 将“用户输入+助手摘要”视为一轮，按 `maxContextTurns`*2 的消息上限裁剪；设置为 0 时不执行。
+- `personalization.md` 中的内容由 `modules/personalization.ps1` 在每次对话前作为额外系统提示注入，位置位于主提示词之后、历史上下文之前，同时不会写入 `$conversationHistory`。
 - 摘要包含计划、回答、命令、执行状态和错误信息，方便下一轮 AI 了解上一次发生了什么。
 - `logger.ps1` 维护会话数组，记录命令、备份、输出和错误，并在退出时生成 Markdown 文档。
+## 个性化配置
+- 根目录 `personalization.md` 使用 UTF-8 Markdown，可手动写入希望长期共享的系统/偏好信息。
+- `modules/personalization.ps1` 会在每次 AI 调用前读取该文件，将其内容作为额外系统提示发送给模型，但不会进入普通上下文记忆。
+- 当你要求 AI “写入/更新个性化配置”时，它会先整理当前上下文，再生成 PowerShell 命令（例如 `Set-Content`、`Add-Content`）把摘要写回该文件，只记录对未来有帮助且不含敏感信息的内容。
 
 ## 调试/测试
 - **Mock 模式**：`ai-api.ps1` 会返回固定的“测试模式”响应，不会访问真实 API。
@@ -57,4 +63,9 @@ Windows_ai/
 ## 开发计划
 - **mcp支持** 通过提供mcp接口，通过mcp提供更多的功能拓展。
 - **自动清除备份** 通过任务计划程序自动为备份文件制作清理计划（现在需要主动向ai助手提出） 
-- **个性化配置**  使ai/用户通过编辑md文件，让ai在不读取系统信息前了解系统信息，帮助ai做出更好的决策
+
+
+
+
+
+

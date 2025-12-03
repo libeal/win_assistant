@@ -1,4 +1,4 @@
-# test-api.ps1 - API连接测试脚本
+﻿# test-api.ps1 - API连接测试脚本
 
 Write-Host "=== OpenAI 兼容 API 测试工具 ===" -ForegroundColor Cyan
 Write-Host ""

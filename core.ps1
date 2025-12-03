@@ -2,6 +2,7 @@
 # Windows AI 助理主流程：加载模块、读取配置、循环交互
 . "$PSScriptRoot\modules\common.ps1"
 . "$PSScriptRoot\modules\backup.ps1"
+. "$PSScriptRoot\modules\personalization.ps1"
 . "$PSScriptRoot\modules\ai-api.ps1"
 . "$PSScriptRoot\modules\executor.ps1"
 . "$PSScriptRoot\modules\logger.ps1"
@@ -181,3 +182,6 @@ while ($true) {
     Add-LogEntry -UserInput $userInput -AIResponse $aiResult -ExecutionResults $executionResults
     Update-ConversationHistory -History $conversationHistory -UserMessage $userInput -AIResponse $aiResult -ExecutionResults $executionResults -MaxTurns $maxContextTurns
 }
+
+
+
