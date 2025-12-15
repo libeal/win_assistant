@@ -3,6 +3,7 @@
 . "$PSScriptRoot\modules\common.ps1"
 . "$PSScriptRoot\modules\backup.ps1"
 . "$PSScriptRoot\modules\personalization.ps1"
+. "$PSScriptRoot\modules\attachments.ps1"
 . "$PSScriptRoot\modules\ai-api.ps1"
 . "$PSScriptRoot\modules\executor.ps1"
 . "$PSScriptRoot\modules\logger.ps1"
@@ -182,6 +183,5 @@ while ($true) {
     Add-LogEntry -UserInput $userInput -AIResponse $aiResult -ExecutionResults $executionResults
     Update-ConversationHistory -History $conversationHistory -UserMessage $userInput -AIResponse $aiResult -ExecutionResults $executionResults -MaxTurns $maxContextTurns
 }
-
 
 
