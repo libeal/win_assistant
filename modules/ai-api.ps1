@@ -215,7 +215,7 @@ function Invoke-AICall {
     $systemPrompt = @"
 你是一名资深中文问答助手兼Windows PowerShell专家，需要根据用户需求在“命令执行”与“直接回答”之间做出判断，并严格遵守以下规则：
 
-1. **响应格式**：仅返回一个 JSON 对象，必须包含字段：
+1. **响应格式**：仅返回一个 JSON 对象，仅包含字段：
    - "responseType"：当只需解答问题时写 "answer"，当需要执行命令时写 "commands"
    - "explanation"：说明你的思路与判断
    - "answer"：当 responseType 为 "answer" 时，给出详尽中文解答；若非问答，可留空字符串
@@ -223,15 +223,16 @@ function Invoke-AICall {
 2. **安全策略**：拒绝生成或提示高危命令（如删除系统关键文件、关闭安全机制等），必要时在 "answer" 中解释原因
 3. **可执行性**：所有生成命令必须在标准 Windows PowerShell 中可直接执行，避免伪代码
 4. **上下文记忆**：你会收到先前的用户与助手消息，请结合这些上下文回答问题；当用户追问同一方向的内容时，优先参考历史记录给出准确描述；若确实没有历史，需明确说明
-5. **仅输出 JSON**：禁止输出 Markdown 或额外文本
+5. **仅输出 JSON**：禁止输出 Markdown 或额外文本，禁止违反响应格式
 6. **个性化配置**：根目录存在 `personalization.md`，系统会在主提示词之后附带其中内容，它不会计入普通上下文
 7. **个性化配置**：
-   - 只有当用户提及与个性化配置相近的内容时，才将个性化配置的内容纳入思考，否则请无视个性化配置
+   - 只有当用户提及与个性化配置相近的内容时，才将个性化配置的内容纳入思考
    - 当用户明确要求你“写入/更新个性化配置”时，请结合当前上下文整理精炼摘要，仅保留对未来有帮助且不含敏感信息的事实
    - 写入时请输出可执行的 PowerShell 命令（如 `Set-Content`、`Add-Content`）来修改该文件，并保持 UTF-8 Markdown
+8. **本地附件上传**：当需要查看/分析本地文件或图片时，在 commands 中返回 `Add-AIAttachment -Paths '<路径1>' '<路径2>' -Note '<用途>'`，组件会读取文件；图片会以 data URI 注入下一次请求，其他文件将以 Base64 文本注入，请避免过大内容
 
 如果一件事情可以直接回答也可以使用命令调用windows自带的组件达到效果，请优先填写 "commands" 并让 "answer" 为空
-如果用户需要下载，请优先将命令指向官网或是知名镜像源，如果winget可以，则优先使用winget
+如果用户需要下载，请优先将命令指向官网或是知名镜像源，如果明确确认winget可以，则优先使用winget
 "@
 
     $messages = @(
@@ -302,6 +303,23 @@ function Invoke-AICall {
         }
     }
 
+    $attachmentMessages = @()
+    try {
+        $attachmentMessages = Pop-AIAttachmentMessages
+    }
+    catch {
+        Write-Host "[提示] 读取待发送附件失败，已跳过本次附件注入：$($_.Exception.Message)" -ForegroundColor Yellow
+        $attachmentMessages = @()
+    }
+
+    if ($attachmentMessages -and $attachmentMessages.Count -gt 0) {
+        foreach ($attachmentMessage in $attachmentMessages) {
+            if ($attachmentMessage) {
+                $messages += $attachmentMessage
+            }
+        }
+    }
+
     $messages += @{
         role    = "user"
         content = $UserPrompt
@@ -351,6 +369,8 @@ function Invoke-AICall {
         Accept         = 'application/json'
         'User-Agent'   = 'WindowsAI-Assistant/1.0'
     }
+
+    $responseText = $null
 
     try {
         # 使用 Invoke-WebRequest + RawContentStream，强制按 UTF8 解码可避免响应缺少 charset 时的乱码
@@ -408,10 +428,12 @@ function Invoke-AICall {
             Write-Host "[无法读取API错误详情]" -ForegroundColor DarkRed
         }
 
+        if (-not [string]::IsNullOrWhiteSpace($responseText)) {
+            Write-Host "[AI原始输出] $responseText" -ForegroundColor DarkGray
+        }
+
         return $null
     }
 }
-
-
 
 
