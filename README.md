@@ -10,6 +10,7 @@ Windows_ai/
 ├─ config.json          # 配置文件：模型、API、上下文参数
 ├─ personalization.md   # 个性化配置：可长期共享的环境信息
 ├─ modules/
+|  ├─ attachments.ps1  # 上传器：当使用命令Add-AIAttachment时上传文件
 │  ├─ common.ps1       # 公共工具：字段读取、错误格式化
 │  ├─ ai-api.ps1       # AI 接口：封装 OpenAI 兼容 Chat Completions
 │  ├─ executor.ps1      # 执行器：展示命令、确认、备份、执行
