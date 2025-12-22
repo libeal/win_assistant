@@ -3,7 +3,7 @@
 Write-Host "=== OpenAI 兼容 API 测试工具 ===" -ForegroundColor Cyan
 Write-Host ""
 
-. "$PSScriptRoot\modules\common.ps1"
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "common.psm1") -Force -DisableNameChecking
 
 # 读取配置
 $configPath = "$PSScriptRoot\config.json"

@@ -1,12 +1,13 @@
 ﻿# core.ps1
 # Windows AI 助理主流程：加载模块、读取配置、循环交互
-. "$PSScriptRoot\modules\common.ps1"
-. "$PSScriptRoot\modules\backup.ps1"
-. "$PSScriptRoot\modules\personalization.ps1"
-. "$PSScriptRoot\modules\attachments.ps1"
-. "$PSScriptRoot\modules\ai-api.ps1"
-. "$PSScriptRoot\modules\executor.ps1"
-. "$PSScriptRoot\modules\logger.ps1"
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "common.psm1") -Force -DisableNameChecking
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "backup.psm1") -Force -DisableNameChecking
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "personalization.psm1") -Force -DisableNameChecking
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "attachments.psm1") -Force -DisableNameChecking
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "mcp.psm1") -Force -DisableNameChecking
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "ai-api.psm1") -Force -DisableNameChecking
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "executor.psm1") -Force -DisableNameChecking
+Import-Module -Name (Join-Path -Path "$PSScriptRoot\modules" -ChildPath "logger.psm1") -Force -DisableNameChecking
 
 #虽然这里是这么写，但是这是为了向下兼容，如果高版本可以换 `ConvertFrom-Json -AsHashtable`
 $conversationHistory = New-Object System.Collections.ArrayList
@@ -58,6 +59,28 @@ function Get-AssistantConversationSummary {
             if ($result.PSObject.Properties.Name -contains 'ErrorDetails' -and
                 -not (Test-StringEmpty -Value $result.ErrorDetails)) {
                 $segments.Add("错误详情: $($result.ErrorDetails)") | Out-Null
+            }
+
+            # 将 MCP 调用输出摘要写入上下文，便于模型在下一轮继续推理
+            $isMcpCommand = $false
+            try {
+                if ($result.Command -and ($result.Command -match '\binvoke-mcprequest\b')) {
+                    $isMcpCommand = $true
+                }
+            }
+            catch {
+                $isMcpCommand = $false
+            }
+
+            if ($isMcpCommand -and
+                $result.PSObject.Properties.Name -contains 'CommandOutput' -and
+                -not (Test-StringEmpty -Value $result.CommandOutput)) {
+                $maxLen = 1200
+                $outputText = $result.CommandOutput.Trim()
+                if ($outputText.Length -gt $maxLen) {
+                    $outputText = $outputText.Substring(0, $maxLen) + '...（输出已截断）'
+                }
+                $segments.Add("MCP 输出摘要: $outputText") | Out-Null
             }
         }
     }
@@ -145,6 +168,9 @@ catch {
     exit 1
 }
 
+$mcpConfig = Import-McpConfig
+$null = Initialize-McpRegistry -McpConfig $mcpConfig
+
 $maxContextTurns = $config.maxContextTurns
 
 Initialize-SessionLog
@@ -167,12 +193,59 @@ while ($true) {
         continue
     }
 
+    $attachmentCommandPattern = '^\s*(Add-AIAttachment|Clear-PendingAIAttachments|Get-PendingAIAttachments)\b'
+    if ($userInput -match $attachmentCommandPattern) {
+        Write-Host "[本地执行] 检测到附件管理命令，直接在本地运行，不会发送给 AI。" -ForegroundColor DarkYellow
+        try {
+            $localOutput = @(Invoke-Expression $userInput)
+            if ($localOutput.Count -gt 0) {
+                Write-Host "`n[命令输出]" -ForegroundColor DarkGray
+                $localOutput | Out-Host
+            }
+        }
+        catch {
+            Write-Host "[错误] 本地执行失败：$($_.Exception.Message)" -ForegroundColor Red
+        }
+        continue
+    }
+
     Write-Host "`n[AI] 正在思考方案..." -ForegroundColor Gray
     $conversationMessages = @()
     if ($maxContextTurns -gt 0 -and $conversationHistory.Count -gt 0) {
         $conversationMessages = $conversationHistory.ToArray()
     }
-    $aiResult = Invoke-AICall -UserPrompt $userInput -Config $config -ConversationHistory $conversationMessages
+
+    $defaultUserPromptSuffix = @"
+（注意响应格式要求，按照要求返回json数据）
+"@.Trim()
+
+    $userPromptSuffix = $null
+    try {
+        if ($config -is [hashtable]) {
+            if ($config.ContainsKey('userPromptSuffix') -and -not (Test-StringEmpty -Value ([string]$config['userPromptSuffix']))) {
+                $userPromptSuffix = [string]$config['userPromptSuffix']
+            }
+        }
+        elseif ($config -and $config.PSObject.Properties['userPromptSuffix']) {
+            if (-not (Test-StringEmpty -Value ([string]$config.userPromptSuffix))) {
+                $userPromptSuffix = [string]$config.userPromptSuffix
+            }
+        }
+    }
+    catch {
+        $userPromptSuffix = $null
+    }
+
+    if (Test-StringEmpty -Value $userPromptSuffix) {
+        $userPromptSuffix = $defaultUserPromptSuffix
+    }
+
+    $userPromptForAI = $userInput
+    if (-not (Test-StringEmpty -Value $userPromptSuffix)) {
+        $userPromptForAI = $userInput + "`n`n" + $userPromptSuffix
+    }
+
+    $aiResult = Invoke-AICall -UserPrompt $userPromptForAI -Config $config -ConversationHistory $conversationMessages
 
     if ($null -eq $aiResult) {
         Write-Host "[错误] AI 没有返回结果或返回的结果不符合要求，请重试或检查配置。" -ForegroundColor Red
@@ -183,5 +256,3 @@ while ($true) {
     Add-LogEntry -UserInput $userInput -AIResponse $aiResult -ExecutionResults $executionResults
     Update-ConversationHistory -History $conversationHistory -UserMessage $userInput -AIResponse $aiResult -ExecutionResults $executionResults -MaxTurns $maxContextTurns
 }
-
-

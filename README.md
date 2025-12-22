@@ -1,76 +1,163 @@
-Windows AI 终端是一套运行在 Windows 本地的 PowerShell 助理，可以把自然语言需求转换为结构化命令。  
-在执行前它会提示风险、提供可选备份，并记录完整的会话轨迹，尽量保证安全、可控、可追溯。除执行命令外，同样支持纯 AI 问答。  
-（我认为ai类似于大脑和嘴，这只是给他装了义肢）
-## 目录结构
+# Windows AI 终端助理
+
+> 我们一起构建的 Windows 本地 PowerShell 智能助理：用自然语言驱动命令执行，同时保留可控与安全。
+
+Windows AI 终端助理运行在本地 PowerShell 环境中，负责把用户需求转成结构化命令、提示风险并执行。它支持多轮上下文、附件注入、会话日志以及 MCP 外部能力扩展，帮助你在 Windows 上更高效地完成日常任务与运维工作。
+
+## ✨ 功能亮点
+
+- **自然语言转命令**：输出结构化 JSON，区分问答与命令执行
+- **执行前确认**：逐条命令展示预期效果，用户确认后执行
+- **智能备份**：涉及写入/删除时，自动解析路径并提供压缩备份选项
+- **上下文记忆**：可配置的多轮对话摘要注入
+- **附件支持**：本地文件/图片转 Base64 或 data URI 注入下一次请求
+- **MCP 扩展**：支持 SSE/WebSocket/stdio/streamableHttp 调用外部工具
+- **会话日志**：完整记录计划、命令、输出与错误，自动导出 Markdown
+
+## 🚀 快速开始
+
+### 环境要求
+
+- Windows
+- PowerShell（建议 7+，Windows PowerShell 5 也兼容）
+- OpenAI 兼容接口（或任意兼容 Chat Completions 的服务）
+
+### 安装与配置
+
+1. 解压或克隆项目到本地
+2. 编辑 `config.json`，填写 API 信息
+
+```json
+{
+  "aiProvider": "OpenAI",
+  "apiKey": "your-api-key",
+  "apiUrl": "https://api.openai.com/v1/chat/completions",
+  "model": "gpt-4o-mini",
+  "maxContextTurns": 3
+}
+```
+
+可选字段（按需添加）：
+
+- `requestTimeoutSec`：AI 请求超时（秒）
+- `response_format`：兼容 OpenAI 的 `response_format` 结构
+- `userPromptSuffix`：附加到用户输入后的自定义提示
+
+> 提示：支持环境变量 `WINDOWS_AI_MOCK=1` 进入 Mock 模式，跳过真实 API。
+
+### 启动
+
+双击 `main.bat`，或在 PowerShell 中运行：
+
+```powershell
+.\main.bat
+```
+
+输入 `exit` 结束会话并导出日志。
+
+## 🧭 使用示例
+
+### 自然语言转命令
 
 ```
-Windows_ai/
-├─ main.bat           # 启动入口
-├─ core.ps1           # 主流程：交互循环、AI 调用、模块调度
-├─ config.json          # 配置文件：模型、API、上下文参数
-├─ personalization.md   # 个性化配置：可长期共享的环境信息
-├─ modules/
-|  ├─ attachments.ps1  # 上传器：当使用命令Add-AIAttachment时上传文件
-│  ├─ common.ps1       # 公共工具：字段读取、错误格式化
-│  ├─ ai-api.ps1       # AI 接口：封装 OpenAI 兼容 Chat Completions
-│  ├─ executor.ps1      # 执行器：展示命令、确认、备份、执行
-│  ├─ backup.ps1       # 备份器：命令解析与压缩备份
-│  ├─ logger.ps1       # 日志器：会话记录与 Markdown 导出
-│  └─ personalization.ps1 # 个性化模块：读取并注入 personalization.md
-├─ test-api.ps1         # API 连通性测试脚本，独立运行
-├─ logs/             # 会话日志输出目录
-└─ README.md
+用户：帮我创建一个名为 MyProject 的文件夹
+AI：  计划概述：将在当前目录创建文件夹
+      是否执行此命令？(Y/N)
+用户：Y
+AI：  [完成] 命令已执行。
 ```
 
-## 使用前准备
+### 触发备份
 
-1. 下载压缩包并解压，安装 PowerShell 7（其实其他版本也没有问题，也就是说不用装），并确保可以访问配置中的 OpenAI 兼容接口。
-2. 编辑 `config.json`：
-   - `aiProvider`：`OpenAI` 或 `Mock`。（这里的openai指的是openai的兼容接口，也就是其他模型也行）
-   - `apiKey` / `apiUrl` / `model`：对应服务的密钥、端点、模型名。
-   - `maxContextTurns`：上下文记忆轮数，0为完全关闭，想要几轮上下文就写几轮
-3. 若需代理，在系统或 PowerShell 会话中配置好 `HTTP(S)_PROXY` 等环境变量。
+```
+用户：删除桌面上的 old_report.txt
+AI：  检测到文件操作，是否先生成备份？(Y/N)
+用户：Y
+AI：  [备份] 已生成压缩包
+      是否执行此命令？(Y/N)
+```
 
-## 快速上手
-1. 双击 `main.bat`（后面不用看，到这里就能用了，内部会切换 UTF-8 代码页并执行`core.ps1`）。
-2. 根据提示输入需求。
-3. AI 输出结构化 JSON，执行器会：
-   - 展示计划概述和 AI 回答（若 `responseType=answer` 会直接返回）。
-   - 对每条命令提示预期效果并询问 `Y/N`。
-   - 如命令可能修改文件，自动进入备份流程：解析路径、询问是否压缩备份；遇到无法解析的模式会先提示是否继续执行。
-4. 执行完成后显示命令输出/错误。输入 `exit` 结束会话，日志自动保存在 `logs/SessionLog_*.md`。（直接删掉不会有日志）
+### 附件注入
 
-## 命令执行与备份流程
-- `executor.ps1` 在执行命令前调用 `Invoke-BackupSelection`。
-- `backup.ps1` 解析命令中的路径：
-  - 可解析的路径逐个提示是否压缩备份，ZIP 文件位于原路径的同级目录。
-  - 无法解析的模式会一次性列出并询问是否继续；若选择 `N`，命令将被跳过，状态记录为“用户取消执行”。
-- 执行结果会返回备份列表和错误详情，供日志与上下文使用。
+```powershell
+Add-AIAttachment -Paths 'report.pdf' -Note '请先阅读并总结'
+Get-PendingAIAttachments
+Clear-PendingAIAttachments
+```
 
-## 本地附件上传
-- 通过 `Add-AIAttachment -Paths '<文件1>' '<文件2>' -Note '<用途>'` 将本地文件/图片加入队列（单个上限 2 MB，不支持目录）。
-- 执行后会把图片转成 data URI，其他文件转成 Base64 文本，作为额外 user 消息注入下一次 Chat Completions 请求，使用一次后自动清空队列。
-- 若未传入参数会提示输入路径，支持逗号/分号分隔；加入队列会在终端确认数量和大小。
+### MCP 调用
 
-## 上下文与日志
-- `core.ps1` 将“用户输入+助手摘要”视为一轮，按 `maxContextTurns`*2 的消息上限裁剪；设置为 0 时不执行。
-- `personalization.md` 中的内容由 `modules/personalization.ps1` 在每次对话前作为额外系统提示注入，位置位于主提示词之后、历史上下文之前，同时不会写入 `$conversationHistory`。
-- 摘要包含计划、回答、命令、执行状态和错误信息，方便下一轮 AI 了解上一次发生了什么。
-- `logger.ps1` 维护会话数组，记录命令、备份、输出和错误，并在退出时生成 Markdown 文档。
-## 个性化配置
-- 根目录 `personalization.md` 使用 UTF-8 Markdown，可手动写入希望长期共享的系统/偏好信息。
-- `modules/personalization.ps1` 会在每次 AI 调用前读取该文件，将其内容作为额外系统提示发送给模型，但不会进入普通上下文记忆。
-- 当你要求 AI “写入/更新个性化配置”时，它会先整理当前上下文，再生成 PowerShell 命令（例如 `Set-Content`、`Add-Content`）把摘要写回该文件，只记录对未来有帮助且不含敏感信息的内容。
+```powershell
+Invoke-McpRequest -Method 'tools/list' -Service 'example-server'
+```
 
-## 调试/测试
-- **Mock 模式**：`ai-api.ps1` 会返回固定的“测试模式”响应，不会访问真实 API。
-- **test-api.ps1**：读取 `config.json`，发送两条简单的 Chat Completions 请求，帮助检查端点/密钥/模型是否正确。
+## ⚙️ 配置说明
 
-## 开发计划
-- **mcp支持** 通过提供mcp接口，通过mcp提供更多的功能拓展。
-- **自动清除备份** 通过任务计划程序自动为备份文件制作清理计划（现在需要主动向ai助手提出） 
+### config.json
 
+- `aiProvider`：目前主要验证 `OpenAI`，也支持 `Mock`
+- `apiKey`：API 密钥
+- `apiUrl`：Chat Completions 端点
+- `model`：模型名称
+- `maxContextTurns`：上下文轮数（0 表示关闭）
 
+### mcp.config.json
 
+支持多服务注册与默认服务设置，传输类型包括 `sse`、`websocket`、`stdio`、`streamableHttp`。
 
+### personalization.md
 
+用于记录长期信息，系统会在每次 AI 调用前注入（不占用上下文记忆）。例如：
+
+```markdown
+# 个性化配置
+
+常用开发目录：D:\code
+常用代理：http://proxy:port
+```
+
+## 🧩 项目结构
+
+```
+win_assistant-main/
+├─ README.md                 # 项目说明
+├─ main.bat                  # 启动入口（设置 UTF-8）
+├─ core.ps1                  # 主流程控制器
+├─ config.json               # AI 配置
+├─ mcp.config.json           # MCP 服务配置
+├─ mcp.md                    # MCP 使用提示
+├─ mcpnew.md                 # MCP 参考文档（扩展说明）
+├─ personalization.md        # 个性化配置
+├─ test-api.ps1              # API 连接测试脚本
+├─ logs/                     # 会话日志与 MCP 跟踪
+│  ├─ SessionLog_*.md         # 自动生成的会话日志
+│  └─ mcp-trace.log           # MCP 调用追踪日志
+└─ modules/                  # 功能模块
+   ├─ ai-api.psm1            # AI API 调用实现
+   ├─ ai-api.ps1             # 兼容入口（加载 .psm1）
+   ├─ attachments.psm1       # 附件处理实现
+   ├─ attachments.ps1        # 兼容入口（加载 .psm1）
+   ├─ backup.psm1            # 备份流程实现
+   ├─ backup.ps1             # 兼容入口（加载 .psm1）
+   ├─ common.psm1            # 通用工具函数
+   ├─ common.ps1             # 兼容入口（加载 .psm1）
+   ├─ executor.psm1          # 命令执行与确认
+   ├─ executor.ps1           # 兼容入口（加载 .psm1）
+   ├─ logger.psm1            # 会话日志实现
+   ├─ logger.ps1             # 兼容入口（加载 .psm1）
+   ├─ mcp.psm1               # MCP 调用实现
+   ├─ mcp.ps1                # 兼容入口（加载 .psm1）
+   ├─ personalization.psm1   # 个性化配置读取
+   └─ personalization.ps1    # 兼容入口（加载 .psm1）
+```
+
+## ✅ 行为约定
+
+- **只执行确认过的命令**：逐条确认，默认安全
+- **高风险命令拒绝或提示**：避免系统级破坏操作
+- **UTF-8 输入输出**：读写文件与日志统一 UTF-8
+
+## 🧪 测试与排错
+
+- `.\test-api.ps1`：测试 API 连通性
+- `logs/`：会话日志与 MCP 调用跟踪
