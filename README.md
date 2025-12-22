@@ -1,6 +1,6 @@
 # Windows AI 终端助理
 
-> 我们一起构建的 Windows 本地 PowerShell 智能助理：用自然语言驱动命令执行，同时保留可控与安全。
+> 与ai一起构建的 Windows 本地 PowerShell 智能助理：用自然语言驱动命令执行，同时保留可控与安全。
 
 Windows AI 终端助理运行在本地 PowerShell 环境中，负责把用户需求转成结构化命令、提示风险并执行。它支持多轮上下文、附件注入、会话日志以及 MCP 外部能力扩展，帮助你在 Windows 上更高效地完成日常任务与运维工作。
 
@@ -112,7 +112,7 @@ Invoke-McpRequest -Method 'tools/list' -Service 'example-server'
 ```markdown
 # 个性化配置
 
-常用开发目录：D:\code
+常用开发目录：
 常用代理：http://proxy:port
 ```
 
