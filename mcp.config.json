@@ -1,0 +1,16 @@
+{
+    "enabled": true,
+    "defaultService": "open-websearch-local",
+    "services": [
+        {
+            "name": "open-websearch-local",
+            "timeoutSec": 60,
+            "transport": {
+                "type": "sse",
+                "url": "http://localhost:3000/sse",
+                "method": "GET",
+                "headers": {}
+            }
+        }
+    ]
+}
